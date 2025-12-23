@@ -3,7 +3,7 @@ import sys
 import os
 
 # =====================
-# 定数・初期設定
+# 初期設定
 # =====================
 WIDTH, HEIGHT = 1000, 600
 FLOOR = HEIGHT - 50
@@ -100,17 +100,29 @@ STAGES = [
 
 
 # =====================
-# ファイタークラス
+# Fighter クラス
 # =====================
 class Fighter(pg.sprite.Sprite):
-    """
-    プレイヤー用ファイター。移動、ジャンプ、HPを管理する。
-    keys: dict で "left","right","jump","attack" のキーコードを渡す
-    """
-    def __init__(self, x, color, keys, name="Fighter"):
+    def __init__(self, x, keys):
         super().__init__()
-        self.image = pg.Surface((60, 120))
-        self.image.fill(color)
+
+        # ===== 画像（サイズ手動調整）=====
+        self.idle_r = pg.transform.scale(
+            pg.image.load("fig/manfighter.png").convert_alpha(), (150, 200)  #画像の大きさ設定
+        )
+        self.idle_l = pg.transform.flip(self.idle_r, True, False)
+
+        self.punch_r = pg.transform.scale(
+            pg.image.load("fig/manfighter_punch.png").convert_alpha(), (150, 200)  #画像の大きさ設定
+        )
+        self.punch_l = pg.transform.flip(self.punch_r, True, False)
+
+        self.kick_r = pg.transform.scale(
+            pg.image.load("fig/manfighter_kick.png").convert_alpha(), (190, 200)  #画像の大きさ設定
+        )
+        self.kick_l = pg.transform.flip(self.kick_r, True, False)
+
+        self.image = self.idle_r
         self.rect = self.image.get_rect()
         self.rect.bottomleft = (x, FLOOR)
 
@@ -119,9 +131,14 @@ class Fighter(pg.sprite.Sprite):
         self.on_ground = True
 
         self.hp = 100
+
         self.keys = keys
-        self.facing = 1  # 1 = 右向き, -1 = 左向き
-        self.name = name
+        self.facing = 1
+
+        # ===== タイマー =====
+        self.attack_timer = 0      # 技中
+        self.recover_timer = 0     # 技後硬直（1秒）
+        self.knockback_vx = 0      # ノックバック速度
 
     def update(self, key_lst):
         """
@@ -129,66 +146,191 @@ class Fighter(pg.sprite.Sprite):
         """
         self.vx = 0
 
-        if key_lst[self.keys["left"]]:
-            self.vx = -6
-            self.facing = -1
-        if key_lst[self.keys["right"]]:
-            self.vx = 6
-            self.facing = 1
+        # ===== 行動可能判定 =====
+        can_move = (self.attack_timer == 0 and self.recover_timer == 0)
 
-        if key_lst[self.keys["jump"]] and self.on_ground:
-            self.vy = -20
-            self.on_ground = False
+        if can_move:
+            if key_lst[self.keys["left"]]:
+                self.vx = -6
+                self.facing = -1
+            if key_lst[self.keys["right"]]:
+                self.vx = 6
+                self.facing = 1
 
-        # 簡易重力
+            if key_lst[self.keys["jump"]] and self.on_ground:
+                self.vy = -20
+                self.on_ground = False
+
+        # ===== 技タイマー =====
+        if self.attack_timer > 0:
+            self.attack_timer -= 1
+            if self.attack_timer == 0:
+                self.recover_timer = 20  #  1/3秒硬直
+        elif self.recover_timer > 0:
+            self.recover_timer -= 1
+        else:
+            self.image = self.idle_r if self.facing == 1 else self.idle_l
+
+        # ===== 重力 =====
         self.vy += 1
-
-        # 位置更新
-        self.rect.x += self.vx
+        self.rect.x += self.vx + self.knockback_vx
         self.rect.y += self.vy
 
-        # 地面判定
         if self.rect.bottom >= FLOOR:
             self.rect.bottom = FLOOR
             self.vy = 0
             self.on_ground = True
+            
+        # ===== ノックバック減衰 =====
+        if self.knockback_vx != 0:
+            self.knockback_vx *= 0.85  # 徐々に減速
+            if abs(self.knockback_vx) < 0.5:
+                self.knockback_vx = 0
+
+    def do_attack(self, atk_type, attacks, hurtboxes, opponent):
+        if self.attack_timer > 0 or self.recover_timer > 0:
+            return
+
+        if atk_type == "punch":
+            self.image = self.punch_r if self.facing == 1 else self.punch_l
+            self.attack_timer = 12
+        else:
+            self.image = self.kick_r if self.facing == 1 else self.kick_l
+            self.attack_timer = 16
+
+        attacks.add(Attack(self, atk_type))
+        hurtboxes.add(HurtBox(opponent, atk_type))
+
 
 
 # =====================
 # 攻撃クラス
 # =====================
 class Attack(pg.sprite.Sprite):
-    """
-    簡易な飛び道具/パンチ用スプライト。
-    owner: 発射元の Fighter オブジェクト(味方判定に使用)
-    life: 生存フレーム(寿命)
-    vx: 横速度
-    """
-    def __init__(self, fighter):
+    DATA = {
+        "punch": {"size": (40, 20), "life": 8, "damage": 5},
+        "kick":  {"size": (60, 25), "life": 10, "damage": 8},
+    }
+
+    OFFSET_Y = {
+        "punch": -10,
+        "kick": 30
+    }
+
+    def __init__(self, fighter, atk_type):
         super().__init__()
-        self.image = pg.Surface((40, 20))
-        self.image.fill((255, 0, 0))
+        self.owner = fighter
+
+        w, h = self.DATA[atk_type]["size"]
+        self.image = pg.Surface((w, h), pg.SRCALPHA)
+        self.image.fill((255, 0, 0, 150))
+
         self.rect = self.image.get_rect()
 
         # 発射時の位置をファイターの前方に設定
         if fighter.facing == 1:
-            self.rect.midleft = fighter.rect.midright
-            self.vx = 12
+            self.rect.left = fighter.rect.right + 10
         else:
-            self.rect.midright = fighter.rect.midleft
-            self.vx = -12
+            self.rect.right = fighter.rect.left - 10
 
-        self.life = 30
-        self.owner = fighter
+        self.rect.centery = fighter.rect.centery + self.OFFSET_Y[atk_type]
+
+        self.life = self.DATA[atk_type]["life"]
+        self.damage = self.DATA[atk_type]["damage"]
 
     def update(self):
         """
         横移動し、寿命が尽きたら削除する。
         """
-        self.rect.x += self.vx
+        # self.rect.x += self.vx
         self.life -= 1
         if self.life <= 0:
             self.kill()
+            
+
+# =====================
+# ノックバック関数
+# =====================
+def apply_knockback(victim, attacker, damage):
+    """
+    ダメージを受けたファイターにノックバックを適用する
+    
+    Args:
+        victim: ダメージを受けたファイター
+        attacker: 攻撃したファイター
+        damage: 与えたダメージ量
+    """
+    knockback_dir = 1 if attacker.facing == 1 else -1
+    knockback_speed = knockback_dir * damage * 0.8
+    victim.knockback_vx += knockback_speed
+    victim.recover_timer = 15
+
+
+# =====================
+# くらい判定（HurtBox）
+# =====================
+class HurtBox(pg.sprite.Sprite):
+    SIZE = {
+        "punch": (60, 30),
+        "kick":  (80, 40)
+    }
+
+    OFFSET_Y = {
+        "punch": -10,
+        "kick": 30
+    }
+
+    def __init__(self, fighter, atk_type):
+        super().__init__()
+        self.owner = fighter
+
+        w, h = self.SIZE[atk_type]
+        self.image = pg.Surface((w, h), pg.SRCALPHA)
+        self.image.fill((0, 0, 255, 100))
+
+        self.rect = self.image.get_rect()
+
+        if fighter.facing == 1:
+            self.rect.left = fighter.rect.right
+        else:
+            self.rect.right = fighter.rect.left
+
+        self.rect.centery = fighter.rect.centery + self.OFFSET_Y[atk_type]
+
+        self.life = 20  # 攻撃判定より長い
+
+    def update(self):
+        self.life -= 1
+        if self.life <= 0:
+            self.kill()
+            
+
+# =====================
+# HPバー描画
+# =====================
+def draw_hp(screen, fighter, x):
+    pg.draw.rect(screen, (255, 0, 0), (x, 20, 300, 20))
+    pg.draw.rect(screen, (0, 255, 0), (x, 20, 3 * fighter.hp, 20))
+
+
+# =====================
+# ダメージ判定関数
+# =====================
+def check_damage(attacks, hurtboxes):
+    """
+    攻撃判定とくらい判定の衝突をチェックし、ダメージを適用する
+    
+    Args:
+        attacks: 攻撃判定のスプライトグループ
+        hurtboxes: くらい判定のスプライトグループ
+    """
+    for atk in attacks:
+        for hb in hurtboxes:
+            if atk.owner != hb.owner and atk.rect.colliderect(hb.rect):
+                hb.owner.hp -= atk.damage
+                apply_knockback(hb.owner, atk.owner, atk.damage)
+                atk.kill()
+                return  # 1フレームに1ヒットまで
 
 
 # =====================
@@ -481,21 +623,23 @@ def main():
     # グループ
     fighters = pg.sprite.Group()
     attacks = pg.sprite.Group()
+    hurtboxes = pg.sprite.Group()
 
-    # プレイヤー作成
-    p1 = Fighter(200, (0, 0, 255), {
+    p1 = Fighter(200, {
         "left": pg.K_a,
         "right": pg.K_d,
         "jump": pg.K_w,
-        "attack": pg.K_f
-    }, name="P1")
+        "punch": pg.K_c,
+        "kick": pg.K_v
+    })
 
-    p2 = Fighter(700, (255, 0, 0), {
+    p2 = Fighter(700, {
         "left": pg.K_LEFT,
         "right": pg.K_RIGHT,
         "jump": pg.K_UP,
-        "attack": pg.K_RCTRL
-    }, name="P2")
+        "punch": pg.K_PERIOD,
+        "kick": pg.K_SLASH
+    })
 
     fighters.add(p1, p2)
 
@@ -510,8 +654,8 @@ def main():
     running = True
 
     # 操作説明(下部)
-    p1_keys_text = "P1: A/D Move  W Jump  F Attack"
-    p2_keys_text = "P2: ←/→ Move  ↑ Jump  RCTRL Attack"
+    p1_keys_text = "P1: A/D Move  W Jump  C Punch  V Kick"
+    p2_keys_text = "P2: ←/→ Move  ↑ Jump  . Punch  / Kick"
 
     # バトル画面の保存用(ポーズ時に背景として使う)
     battle_surface = None
@@ -519,19 +663,20 @@ def main():
     while running:
         dt_ms = clock.tick(60)
         dt = dt_ms / 1000.0
-
+        screen.fill((30, 30, 30))
         key_lst = pg.key.get_pressed()
-
+        
         for event in pg.event.get():
             if event.type == pg.QUIT:
-                running = False
+                pg.quit()
+                sys.exit()
 
-            # ===== タイトル =====
+            # ===== タイトル画面 =====
             if game_state == TITLE:
                 if event.type == pg.KEYDOWN and event.key == pg.K_RETURN:
                     game_state = SELECT
 
-            # ===== バトル選択 =====
+            # ===== ステージ選択画面 =====
             elif game_state == SELECT:
                 if event.type == pg.KEYDOWN:
                     if event.key == pg.K_UP:
@@ -539,35 +684,42 @@ def main():
                     if event.key == pg.K_DOWN:
                         selected_stage = (selected_stage + 1) % (len(STAGES) + 1)
                     if event.key == pg.K_RETURN:
-                        if selected_stage == len(STAGES):  # ゲーム終了
+                        if selected_stage == len(STAGES):
                             running = False
                         else:
                             current_stage = selected_stage
                             game_state = BATTLE
                             hud.reset_timer()
+                            p1.rect.bottomleft = (200, FLOOR)
+                            p2.rect.bottomleft = (700, FLOOR)
+                            p1.hp = 100
+                            p2.hp = 100
+                            attacks.empty()
+                            hurtboxes.empty()
                             safe_load_and_play_bgm(BATTLE_BGM, hud.volume)
 
-            # ===== バトル中の入力 =====
+            # ===== バトル画面 =====
             elif game_state == BATTLE:
-                # ESCキーでポーズ
                 if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
                     game_state = PAUSED
                     battle_surface = screen.copy()
 
-                # ポーズボタン(クリック判定)
                 if event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
                     if hud.pause_rect.collidepoint(event.pos):
                         game_state = PAUSED
                         battle_surface = screen.copy()
 
                 if event.type == pg.KEYDOWN:
-                    # 攻撃キーでAttack生成
-                    if event.key == p1.keys["attack"]:
-                        attacks.add(Attack(p1))
-                    if event.key == p2.keys["attack"]:
-                        attacks.add(Attack(p2))
+                    if event.key == p1.keys["punch"]:
+                        p1.do_attack("punch", attacks, hurtboxes, p2)
+                    if event.key == p1.keys["kick"]:
+                        p1.do_attack("kick", attacks, hurtboxes, p2)
+                    if event.key == p2.keys["punch"]:
+                        p2.do_attack("punch", attacks, hurtboxes, p1)
+                    if event.key == p2.keys["kick"]:
+                        p2.do_attack("kick", attacks, hurtboxes, p1)
 
-            # ===== ポーズ中の入力 =====
+            # ===== ポーズ中 =====
             elif game_state == PAUSED:
                 result = pause_menu.handle_event(event)
                 if result == "Continue":
@@ -578,11 +730,12 @@ def main():
                     game_state = SELECT
                     safe_load_and_play_bgm(MENU_BGM, hud.volume)
 
-            # ===== 設定画面の入力 =====
+            # ===== 設定画面 =====
             elif game_state == SETTINGS:
                 result = settings_menu.handle_event(event)
                 if result == "Back":
                     game_state = PAUSED
+        
 
         # ===== 描画・更新 =====
         if game_state == TITLE:
@@ -601,19 +754,19 @@ def main():
             # 更新
             fighters.update(key_lst)
             attacks.update()
+            hurtboxes.update()
 
-            # 攻撃判定(攻撃のownerが被弾相手と等しくないことを確認)
-            for atk in attacks.copy():
-                if atk.owner != p1 and atk.rect.colliderect(p1.rect):
-                    p1.hp -= 5
-                    atk.kill()
-                if atk.owner != p2 and atk.rect.colliderect(p2.rect):
-                    p2.hp -= 5
-                    atk.kill()
+            # ダメージ判定
+            check_damage(attacks, hurtboxes)
 
             # 描画
             fighters.draw(screen)
             attacks.draw(screen)
+            hurtboxes.draw(screen)
+            
+            # HPバー描画
+            draw_hp(screen, p1, 50)
+            draw_hp(screen, p2, WIDTH - 350)
 
             # HUD 描画
             hud.draw_top(screen)
@@ -662,12 +815,5 @@ def main():
 
         pg.display.update()
 
-    pg.quit()
-    sys.exit()
-
-
-# =====================
-# 実行
-# =====================
 if __name__ == "__main__":
     main()
