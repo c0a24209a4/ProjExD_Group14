@@ -18,24 +18,22 @@ clock = pg.time.Clock()
 # Fighter クラス
 # =====================
 class Fighter(pg.sprite.Sprite):
-    def __init__(self, x, keys):
+    def __init__(self, x, keys, char_name):
         super().__init__()
-
-        self.attack_hurtbox = None
 
         # ===== 画像 =====
         self.idle_r = pg.transform.scale(
-            pg.image.load("fig/manfighter.png").convert_alpha(), (150, 200)
+            pg.image.load(f"fig/{char_name}fighter.png").convert_alpha(), (150, 200)
         )
         self.idle_l = pg.transform.flip(self.idle_r, True, False)
 
         self.punch_r = pg.transform.scale(
-            pg.image.load("fig/manfighter_punch.png").convert_alpha(), (150, 200)
+            pg.image.load(f"fig/{char_name}fighter_punch.png").convert_alpha(), (150, 200)
         )
         self.punch_l = pg.transform.flip(self.punch_r, True, False)
 
         self.kick_r = pg.transform.scale(
-            pg.image.load("fig/manfighter_kick.png").convert_alpha(), (190, 200)
+            pg.image.load(f"fig/{char_name}fighter_kick.png").convert_alpha(), (190, 200)
         )
         self.kick_l = pg.transform.flip(self.kick_r, True, False)
 
@@ -69,13 +67,13 @@ class Fighter(pg.sprite.Sprite):
             self.attack_hurtbox = None
             return
 
-    # パンチ中
+        # パンチ中
         if self.image in (self.punch_r, self.punch_l):
             w, h = 65, 30
             offset_x = 70 if self.facing == 1 else -70
             offset_y = 60
 
-    # キック中
+        # キック中
         elif self.image in (self.kick_r, self.kick_l):
             w, h = 85, 35
             offset_x = 70 if self.facing == 1 else -70
@@ -84,10 +82,10 @@ class Fighter(pg.sprite.Sprite):
         else:
             self.attack_hurtbox = None
             return
+
         self.attack_hurtbox = pg.Rect(0, 0, w, h)
         self.attack_hurtbox.centerx = self.rect.centerx + offset_x
         self.attack_hurtbox.centery = self.rect.centery - offset_y
-
 
     def update(self, key_lst):
         self.vx = 0
@@ -158,11 +156,8 @@ class Attack(pg.sprite.Sprite):
 
         self.rect = self.image.get_rect()
         offset_x = 70 if fighter.facing == 1 else -70
-        if atk_type == "punch":
-            offset_y = 60
-        elif atk_type == "kick":
-            offset_y = -60
-        
+        offset_y = 60 if atk_type == "punch" else -60
+
         self.rect.centerx = fighter.rect.centerx + offset_x
         self.rect.centery = fighter.rect.centery - offset_y
 
@@ -174,7 +169,7 @@ class Attack(pg.sprite.Sprite):
             self.kill()
 
 # =====================
-# HPバー描画
+# HPバー
 # =====================
 def draw_hp(screen, fighter, x):
     pg.draw.rect(screen, (255, 0, 0), (x, 20, 300, 20))
@@ -192,7 +187,7 @@ def main():
         "jump": pg.K_w,
         "punch": pg.K_c,
         "kick": pg.K_v
-    })
+    }, "man")
 
     p2 = Fighter(700, {
         "left": pg.K_LEFT,
@@ -200,7 +195,7 @@ def main():
         "jump": pg.K_UP,
         "punch": pg.K_PERIOD,
         "kick": pg.K_SLASH
-    })
+    }, "woman")
 
     fighters = [p1, p2]
 
@@ -213,28 +208,24 @@ def main():
                 pg.quit()
                 sys.exit()
             if event.type == pg.KEYDOWN:
-                if event.key == p1.keys["punch"]:
-                    p1.do_attack("punch", attacks)
-                if event.key == p1.keys["kick"]:
-                    p1.do_attack("kick", attacks)
-                if event.key == p2.keys["punch"]:
-                    p2.do_attack("punch", attacks)
-                if event.key == p2.keys["kick"]:
-                    p2.do_attack("kick", attacks)
+                for f in fighters:
+                    if event.key == f.keys["punch"]:
+                        f.do_attack("punch", attacks)
+                    if event.key == f.keys["kick"]:
+                        f.do_attack("kick", attacks)
 
         for f in fighters:
             f.update(key_lst)
 
         attacks.update()
 
-        # ===== HitBox × HurtBox =====
+        # HitBox × HurtBox
         for atk in attacks:
             for f in fighters:
                 if f == atk.owner:
                     continue
 
                 hit = False
-
                 if atk.rect.colliderect(f.hurtbox):
                     hit = True
                 elif f.attack_hurtbox and atk.rect.colliderect(f.attack_hurtbox):
@@ -246,33 +237,19 @@ def main():
                     break
 
         pg.draw.rect(screen, (80, 160, 80), (0, FLOOR, WIDTH, HEIGHT))
+
         for f in fighters:
             screen.blit(f.image, f.rect)
-            pg.draw.rect(screen, (0, 0, 255), f.hurtbox, 1)  # 可視化（後で消せる）
-            screen.blit(f.image, f.rect)
             pg.draw.rect(screen, (0, 0, 255), f.hurtbox, 1)
-
             if f.attack_hurtbox:
                 pg.draw.rect(screen, (0, 200, 255), f.attack_hurtbox, 2)
 
-        # ===== HPバー描画 =====
         draw_hp(screen, p1, 50)
         draw_hp(screen, p2, WIDTH - 350)
-
-        # 勝敗判定
-        if p1.hp <= 0 or p2.hp <= 0:
-            font = pg.font.Font(None, 80)
-            text = font.render("K.O.", True, (255, 255, 0))
-            screen.blit(text, (WIDTH//2 - 80, HEIGHT//2 - 40))
-            pg.display.update()
-            pg.time.delay(2000)
-            return
 
         attacks.draw(screen)
         pg.display.update()
         clock.tick(60)
 
-
 if __name__ == "__main__":
     main()
-    
